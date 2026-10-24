@@ -17,3 +17,15 @@ Android Studio mini versi APK: edit Java -> build -> sign -> install, semuanya d
 
 ## Alur build di dalam aplikasi
 aapt2 compile -> aapt2 link -> ECJ -> D8 -> gabung dex -> apksig -> install
+
+## Fitur (v0.2)
+- Banyak proyek: buat baru (nama + package), buka, hapus
+- Banyak file per proyek: tambah file `.java` / `.xml`, ganti file, hapus file
+- Syntax highlight untuk Java dan XML
+- Build memakai semua file `src/**/*.java` dan seluruh folder `res/`
+
+## Update dari zip baru
+    cd ~ && unzip -o /sdcard/Download/ApkForge.zip
+    cd ApkForge && git add . && git commit -m "v0.2"
+    read -s -p "Token: " T; echo
+    git push https://SenzaProject:$T@github.com/SenzaProject/ApkForge.git main

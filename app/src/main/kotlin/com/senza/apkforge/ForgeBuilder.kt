@@ -22,24 +22,21 @@ import java.util.zip.ZipOutputStream
  */
 class ForgeBuilder(private val ctx: Context, private val log: (String) -> Unit) {
 
-    private val root = File(ctx.filesDir, "forge")
-    private val proj = File(root, "hello")
-    private val androidJar = File(root, "tools/android.jar")
+    private val androidJar = File(File(ctx.filesDir, "forge"), "tools/android.jar")
 
-    val sourceFile = File(proj, "src/com/example/hello/MainActivity.java")
-    val signedApk = File(proj, "out/app-signed.apk")
+    fun apkOf(proj: File) = File(proj, "out/app-signed.apk")
 
-    /** Salin template proyek & android.jar (hanya jika belum ada). */
-    fun prepare() {
-        if (!proj.exists()) copyAssets("template", proj)
+    /** Salin android.jar dari assets (hanya jika belum ada). */
+    fun prepareTools() {
         if (!androidJar.exists()) {
             androidJar.parentFile?.mkdirs()
             ctx.assets.open("android.jar").use { i -> androidJar.outputStream().use { i.copyTo(it) } }
         }
     }
 
-    fun build(): File {
-        prepare()
+    fun build(proj: File): File {
+        prepareTools()
+        val signedApk = apkOf(proj)
         val aapt2 = File(ctx.applicationInfo.nativeLibraryDir, "libaapt2.so")
         require(aapt2.exists()) {
             "libaapt2.so tidak ditemukan. Taruh binary aapt2 ARM64 di app/src/main/jniLibs/arm64-v8a/libaapt2.so lalu build ulang ApkForge."
@@ -158,16 +155,5 @@ class ForgeBuilder(private val ctx: Context, private val log: (String) -> Unit) 
             .setV2SigningEnabled(true)
             .build()
             .sign()
-    }
-
-    private fun copyAssets(path: String, dest: File) {
-        val children = ctx.assets.list(path) ?: emptyArray()
-        if (children.isEmpty()) {
-            dest.parentFile?.mkdirs()
-            ctx.assets.open(path).use { i -> dest.outputStream().use { i.copyTo(it) } }
-        } else {
-            dest.mkdirs()
-            children.forEach { copyAssets("$path/$it", File(dest, it)) }
-        }
     }
 }
