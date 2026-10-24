@@ -6,6 +6,17 @@ import java.io.File
 /** Mengelola banyak proyek di filesDir/forge/projects/<nama>. */
 class ProjectStore(private val ctx: Context) {
 
+    companion object {
+        /** Saran package dari nama aplikasi: "Kalkulator Ku" -> com.example.kalkulatorku */
+        fun suggestPackage(appName: String): String {
+            var seg = appName.lowercase().filter { it in 'a'..'z' || it in '0'..'9' }
+            if (seg.isEmpty()) seg = "app"
+            if (seg[0].isDigit()) seg = "app$seg"
+            if (seg in Highlighter.JAVA_KEYWORDS) seg += "app"
+            return "com.example.$seg"
+        }
+    }
+
     val root = File(ctx.filesDir, "forge/projects").apply { mkdirs() }
 
     fun list(): List<String> =
@@ -13,12 +24,17 @@ class ProjectStore(private val ctx: Context) {
 
     fun dir(name: String) = File(root, name)
 
+    fun packageOf(name: String): String {
+        val m = File(dir(name), "AndroidManifest.xml").takeIf { it.exists() }?.readText() ?: return ""
+        return Regex("package\\s*=\\s*\"([^\"]+)\"").find(m)?.groupValues?.get(1) ?: ""
+    }
+
     fun create(name: String, pkg: String): File {
-        require(Regex("[A-Za-z0-9_-]{1,40}").matches(name)) {
-            "Nama proyek: huruf, angka, _ atau - (maks 40 karakter)."
+        require(Regex("[A-Za-z0-9][A-Za-z0-9 _-]{0,39}").matches(name)) {
+            "Nama hanya boleh huruf, angka, spasi, _ atau - (maksimal 40 karakter)."
         }
         require(Regex("[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+").matches(pkg)) {
-            "Package tidak valid. Contoh: com.contoh.app"
+            "Package tidak valid. Contoh: com.contoh.app (huruf kecil, dipisah titik)."
         }
         require(pkg.split('.').none { it in Highlighter.JAVA_KEYWORDS }) {
             "Package tidak boleh memakai kata kunci Java."
@@ -45,7 +61,7 @@ class ProjectStore(private val ctx: Context) {
         require(rel.endsWith(".java") || rel.endsWith(".xml")) { "Hanya file .java atau .xml." }
         require(!rel.endsWith(".java") || rel.startsWith("src/")) { "File .java harus di dalam src/." }
         val f = File(dir(project), rel)
-        require(!f.exists()) { "File sudah ada." }
+        require(!f.exists()) { "File itu sudah ada." }
         f.parentFile?.mkdirs()
         f.writeText(skeleton(rel))
         return f
@@ -60,6 +76,12 @@ class ProjectStore(private val ctx: Context) {
             return "${header}public class $cls {\n\n}\n"
         }
         val xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+        if (rel.startsWith("res/layout/")) {
+            return xml + "<LinearLayout xmlns:android=\"http://schemas.android.com/apk/res/android\"\n" +
+                "    android:layout_width=\"match_parent\"\n" +
+                "    android:layout_height=\"match_parent\"\n" +
+                "    android:orientation=\"vertical\">\n\n</LinearLayout>\n"
+        }
         return if (rel.startsWith("res/values/")) "$xml<resources>\n\n</resources>\n" else xml
     }
 

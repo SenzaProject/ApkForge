@@ -18,6 +18,11 @@ Android Studio mini versi APK: edit Java -> build -> sign -> install, semuanya d
 ## Alur build di dalam aplikasi
 aapt2 compile -> aapt2 link -> ECJ -> D8 -> gabung dex -> apksig -> install
 
+## Fitur (v0.3 - UI ramah pemula)
+- Beranda: kartu status alat, panduan 3 langkah, daftar proyek, tombol buat aplikasi baru
+- Editor gelap + tab file + tombol simbol { } ( ) ;
+- Build dengan progress langkah, pesan error berbahasa Indonesia, tombol "Ke baris N"
+
 ## Fitur (v0.2)
 - Banyak proyek: buat baru (nama + package), buka, hapus
 - Banyak file per proyek: tambah file `.java` / `.xml`, ganti file, hapus file
@@ -26,6 +31,6 @@ aapt2 compile -> aapt2 link -> ECJ -> D8 -> gabung dex -> apksig -> install
 
 ## Update dari zip baru
     cd ~ && unzip -o /sdcard/Download/ApkForge.zip
-    cd ApkForge && git add . && git commit -m "v0.2"
+    cd ApkForge && git add . && git commit -m "v0.3"
     read -s -p "Token: " T; echo
     git push https://SenzaProject:$T@github.com/SenzaProject/ApkForge.git main

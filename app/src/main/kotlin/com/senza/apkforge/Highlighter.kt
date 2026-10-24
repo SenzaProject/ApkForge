@@ -23,11 +23,11 @@ object Highlighter {
         """(//[^\n]*|/\*[\s\S]*?\*/)|("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|(@\w+)|\b(\d+(?:\.\d+)?[fFlLdD]?)\b|\b(""" +
             JAVA_KEYWORDS.joinToString("|") + """)\b"""
     )
-    private val javaColors = intArrayOf(0xFF6A737D.toInt(), 0xFF067D17.toInt(), 0xFF9E880D.toInt(), 0xFF1750EB.toInt(), 0xFF0033B3.toInt())
+    private val javaColors = intArrayOf(0xFF7F848E.toInt(), 0xFF98C379.toInt(), 0xFFE5C07B.toInt(), 0xFFD19A66.toInt(), 0xFFC678DD.toInt())
 
     // grup: 1 komentar, 2 nilai atribut, 3 nama tag, 4 nama atribut
     private val xmlRe = Regex("""(<!--[\s\S]*?-->)|("[^"]*")|(</?[\w.:-]+)|([\w.:-]+)(?==)""")
-    private val xmlColors = intArrayOf(0xFF6A737D.toInt(), 0xFF067D17.toInt(), 0xFF0033B3.toInt(), 0xFF871094.toInt())
+    private val xmlColors = intArrayOf(0xFF7F848E.toInt(), 0xFF98C379.toInt(), 0xFFE06C75.toInt(), 0xFFD19A66.toInt())
 
     fun apply(e: Editable, isXml: Boolean) {
         if (e.length > 80_000) return // file besar: lewati supaya tidak lag

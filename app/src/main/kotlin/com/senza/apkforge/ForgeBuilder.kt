@@ -6,6 +6,7 @@ import com.android.tools.r8.D8
 import com.android.tools.r8.D8Command
 import com.android.tools.r8.OutputMode
 import java.io.File
+import java.io.IOException
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.security.KeyStore
@@ -16,15 +17,37 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 
+/** Error build dengan jenis, supaya UI bisa menampilkan pesan & tombol yang pas. */
+class BuildError(
+    val kind: Kind,
+    message: String,
+    val file: String? = null,
+    val line: Int? = null
+) : Exception(message) {
+    enum class Kind { TOOLS, CODE, RESOURCE, OTHER }
+}
+
 /**
  * Pipeline build di perangkat:
  * aapt2 compile -> aapt2 link -> ECJ -> D8 -> gabung dex ke APK -> sign (apksig)
  */
-class ForgeBuilder(private val ctx: Context, private val log: (String) -> Unit) {
+class ForgeBuilder(
+    private val ctx: Context,
+    private val log: (String) -> Unit,
+    private val onStep: (Int, String) -> Unit
+) {
+    companion object { const val TOTAL_STEPS = 6 }
 
     private val androidJar = File(File(ctx.filesDir, "forge"), "tools/android.jar")
 
     fun apkOf(proj: File) = File(proj, "out/app-signed.apk")
+    fun aapt2File() = File(ctx.applicationInfo.nativeLibraryDir, "libaapt2.so")
+    fun hasAapt2() = aapt2File().exists()
+
+    fun hasAndroidJar(): Boolean {
+        if (androidJar.exists()) return true
+        return try { ctx.assets.open("android.jar").close(); true } catch (e: IOException) { false }
+    }
 
     /** Salin android.jar dari assets (hanya jika belum ada). */
     fun prepareTools() {
@@ -35,13 +58,16 @@ class ForgeBuilder(private val ctx: Context, private val log: (String) -> Unit) 
     }
 
     fun build(proj: File): File {
+        if (!hasAndroidJar()) {
+            throw BuildError(BuildError.Kind.TOOLS, "Pustaka Android (android.jar) tidak ada di dalam aplikasi ini.")
+        }
         prepareTools()
-        val signedApk = apkOf(proj)
-        val aapt2 = File(ctx.applicationInfo.nativeLibraryDir, "libaapt2.so")
-        require(aapt2.exists()) {
-            "libaapt2.so tidak ditemukan. Taruh binary aapt2 ARM64 di app/src/main/jniLibs/arm64-v8a/libaapt2.so lalu build ulang ApkForge."
+        val aapt2 = aapt2File()
+        if (!aapt2.exists()) {
+            throw BuildError(BuildError.Kind.TOOLS, "Alat aapt2 belum terpasang di ApkForge, jadi resource belum bisa diproses.")
         }
 
+        val signedApk = apkOf(proj)
         val out = File(proj, "out").apply { deleteRecursively(); mkdirs() }
         val gen = File(out, "gen").apply { mkdirs() }
         val classes = File(out, "classes").apply { mkdirs() }
@@ -50,24 +76,24 @@ class ForgeBuilder(private val ctx: Context, private val log: (String) -> Unit) 
         val base = File(out, "base.apk")
         val unsigned = File(out, "app-unsigned.apk")
 
-        log("[1/6] aapt2 compile")
-        exec(listOf(aapt2.path, "compile", "--dir", File(proj, "res").path, "-o", resZip.path))
+        onStep(1, "Membaca resource (teks, layout, gambar)")
+        execAapt(listOf(aapt2.path, "compile", "--dir", File(proj, "res").path, "-o", resZip.path), "membaca resource")
 
-        log("[2/6] aapt2 link")
-        exec(listOf(
+        onStep(2, "Menyusun resource dan manifest")
+        execAapt(listOf(
             aapt2.path, "link",
             "-o", base.path,
             "-I", androidJar.path,
             "--manifest", File(proj, "AndroidManifest.xml").path,
             "--java", gen.path,
             "--min-sdk-version", "26",
-            "--target-sdk-version", "28",   // 28 -> tidak wajib zipalign/arsc-aligned
+            "--target-sdk-version", "28",
             "--version-code", "1",
             "--version-name", "1.0",
             resZip.path
-        ))
+        ), "menyusun resource")
 
-        log("[3/6] ECJ (Java -> class)")
+        onStep(3, "Memeriksa dan mengompilasi kode Java")
         val javaFiles = (File(proj, "src").walk() + gen.walk())
             .filter { it.isFile && it.extension == "java" }.map { it.path }.toList()
         val args = arrayOf(
@@ -79,25 +105,46 @@ class ForgeBuilder(private val ctx: Context, private val log: (String) -> Unit) 
         val pw = PrintWriter(sw, true)
         val ok = org.eclipse.jdt.internal.compiler.batch.Main(pw, pw, false, null, null).compile(args)
         pw.flush()
-        if (sw.toString().isNotBlank()) log(sw.toString())
-        check(ok) { "Kompilasi Java gagal (lihat log di atas)." }
+        val text = sw.toString()
+        if (text.isNotBlank()) log(text)
+        if (!ok) {
+            val m = Regex("ERROR in (.+?) \\(at line (\\d+)\\)\\R(?:.*\\R){2}(.*)").find(text)
+            if (m != null) {
+                val path = m.groupValues[1]
+                val line = m.groupValues[2].toInt()
+                throw BuildError(
+                    BuildError.Kind.CODE,
+                    "${File(path).name}, baris $line:\n${friendlyJava(m.groupValues[3].trim())}",
+                    path, line
+                )
+            }
+            throw BuildError(BuildError.Kind.CODE, "Kode Java tidak bisa dikompilasi. Ketuk 'Lihat detail'.")
+        }
 
-        log("[4/6] D8 (class -> dex)")
-        val classFiles = classes.walk().filter { it.isFile && it.extension == "class" }.map { it.toPath() }.toList()
-        D8.run(
-            D8Command.builder()
-                .addProgramFiles(classFiles)
-                .addLibraryFiles(androidJar.toPath())
-                .setOutput(dex.toPath(), OutputMode.DexIndexed)
-                .setMinApiLevel(26)
-                .build()
-        )
+        onStep(4, "Mengubah kode ke format Android (dex)")
+        try {
+            val classFiles = classes.walk().filter { it.isFile && it.extension == "class" }.map { it.toPath() }.toList()
+            D8.run(
+                D8Command.builder()
+                    .addProgramFiles(classFiles)
+                    .addLibraryFiles(androidJar.toPath())
+                    .setOutput(dex.toPath(), OutputMode.DexIndexed)
+                    .setMinApiLevel(26)
+                    .build()
+            )
+        } catch (e: Exception) {
+            throw BuildError(BuildError.Kind.OTHER, "Gagal mengubah kode ke format Android: ${e.message}")
+        }
 
-        log("[5/6] Gabung dex ke APK")
+        onStep(5, "Merakit APK")
         mergeDex(base, dex, unsigned)
 
-        log("[6/6] Sign APK")
-        sign(unsigned, signedApk)
+        onStep(6, "Menandatangani APK")
+        try {
+            sign(unsigned, signedApk)
+        } catch (e: Exception) {
+            throw BuildError(BuildError.Kind.OTHER, "Gagal menandatangani APK: ${e.message}")
+        }
 
         log("Selesai: ${signedApk.length() / 1024} KB")
         return signedApk
@@ -105,11 +152,42 @@ class ForgeBuilder(private val ctx: Context, private val log: (String) -> Unit) 
 
     // ---------- helper ----------
 
-    private fun exec(cmd: List<String>) {
-        val p = ProcessBuilder(cmd).redirectErrorStream(true).start()
-        p.inputStream.bufferedReader().forEachLine { log(it) }
+    private fun friendlyJava(msg: String): String = when {
+        msg.contains("Syntax error") -> "$msg\n(Cek tanda ; ) } yang kurang atau berlebih.)"
+        msg.contains("cannot be resolved to a type") -> "$msg\n(Mungkin kurang 'import' atau salah ketik nama kelas.)"
+        msg.contains("cannot be resolved") -> "$msg\n(Nama ini belum dibuat atau salah ketik.)"
+        msg.contains("is undefined") -> "$msg\n(Fungsi ini tidak ada. Cek ejaan dan huruf besar/kecil.)"
+        else -> msg
+    }
+
+    private fun execAapt(cmd: List<String>, what: String) {
+        val p = try {
+            ProcessBuilder(cmd).redirectErrorStream(true).start()
+        } catch (e: IOException) {
+            throw BuildError(
+                BuildError.Kind.TOOLS,
+                "aapt2 tidak bisa dijalankan di perangkat ini. Pastikan itu versi Android ARM64 yang berdiri sendiri.\n${e.message}"
+            )
+        }
+        val outText = StringBuilder()
+        p.inputStream.bufferedReader().forEachLine { outText.appendLine(it); log(it) }
         val code = p.waitFor()
-        check(code == 0) { "Perintah gagal (exit $code): ${cmd.first().substringAfterLast('/')} ${cmd.getOrNull(1)}" }
+        if (code == 0) return
+        if (outText.contains("CANNOT LINK EXECUTABLE") || code == 126 || code == 127) {
+            throw BuildError(
+                BuildError.Kind.TOOLS,
+                "File aapt2 tidak cocok dengan perangkat ini (butuh versi Android ARM64 yang berdiri sendiri)."
+            )
+        }
+        val m = Regex("(\\S+?):(\\d+): error: (.+)").find(outText)
+        if (m != null) {
+            throw BuildError(
+                BuildError.Kind.RESOURCE,
+                "${File(m.groupValues[1]).name}, baris ${m.groupValues[2]}:\n${m.groupValues[3]}",
+                m.groupValues[1], m.groupValues[2].toInt()
+            )
+        }
+        throw BuildError(BuildError.Kind.RESOURCE, "Gagal $what (kode $code). Ketuk 'Lihat detail'.")
     }
 
     private fun mergeDex(base: File, dexDir: File, dest: File) {
